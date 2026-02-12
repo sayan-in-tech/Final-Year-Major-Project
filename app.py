@@ -13,8 +13,12 @@ import whisper
 import torch
 import tempfile
 import time
+import cv2
 from pathlib import Path
 from audio_formatter import convert_to_wav
+from torchvision import transforms
+from models.face_model import FaceEmotionCNN, EMOTIONS
+from video_processor import process_video_emotions
 
 
 try:
@@ -41,7 +45,7 @@ BASE_DIR = Path(__file__).resolve().parent
 TEXT_MODEL_DIR = BASE_DIR / "Emotion-Detection-in-Text"
 TEXT_MODEL_PATH = TEXT_MODEL_DIR / "models" / "emotion_classifier_pipe_lr.pkl"
 # Set page config
-st.set_page_config(page_title="Emotion Recognition from Speech", page_icon="🎧", layout="wide", initial_sidebar_state="collapsed")
+st.set_page_config(page_title="Emotion Recognition from Speech & Video", page_icon="🎧", layout="wide", initial_sidebar_state="collapsed")
 
 # Custom CSS for dark theme styling
 st.markdown("""
@@ -147,8 +151,8 @@ st.markdown("""
 st.markdown(
     """
     <div class="title-container">
-        <h1 style='color: #a0a0ff; margin-bottom: 0.5rem;'>🎧 Emotion Recognition from Speech</h1>
-        <p style='font-size: 1.2rem; color: #b0b0d0; margin-top: 0.5rem;'>Upload any audio file to detect the emotion in the voice!</p>
+        <h1 style='color: #a0a0ff; margin-bottom: 0.5rem;'>🎧 Emotion Recognition from Speech & Video</h1>
+        <p style='font-size: 1.2rem; color: #b0b0d0; margin-top: 0.5rem;'>Upload audio files to detect voice emotions, or video files to detect face emotions!</p>
     </div>
     """,
     unsafe_allow_html=True
@@ -195,6 +199,34 @@ pipe_lr = load_text_emotion_model()
 whisper_model = load_whisper_model()
 
 
+@st.cache_resource
+def load_face_emotion_model():
+    """Load face emotion detection model."""
+    try:
+        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        model = FaceEmotionCNN(num_classes=7)
+        model_path = BASE_DIR / "models" / "face_model.pth"
+        
+        if model_path.exists():
+            model.load_state_dict(torch.load(str(model_path), map_location=device))
+        model.to(device)
+        model.eval()
+        return model, device
+    except Exception as e:
+        st.error(f"❌ Error loading face emotion model: {e}")
+        return None, None
+
+
+face_model, face_device = load_face_emotion_model()
+
+# Face image transform
+face_transform = transforms.Compose([
+    transforms.Resize((224, 224)),
+    transforms.ToTensor(),
+    transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
+])
+
+
 TEXT_TO_VOICE_EMOTION_MAP = {
     "anger": "angry",
     "joy": "happy",
@@ -203,6 +235,17 @@ TEXT_TO_VOICE_EMOTION_MAP = {
     "sadness": "sad",
     "shame": "neutral",
     "surprise": "surprise",
+}
+
+
+emotion_colors = {
+    "angry": "#FF4444",
+    "happy": "#4CAF50",
+    "sad": "#2196F3",
+    "fear": "#9C27B0",
+    "disgust": "#FF9800",
+    "surprise": "#00BCD4",
+    "neutral": "#9E9E9E",
 }
 
 
@@ -372,15 +415,6 @@ if uploaded_file is not None:
             """, unsafe_allow_html=True)
             
             audio_cols = st.columns([1, 1])
-            emotion_colors = {
-                "angry": "#FF4444",
-                "happy": "#4CAF50",
-                "sad": "#2196F3",
-                "fear": "#9C27B0",
-                "disgust": "#FF9800",
-                "surprise": "#00BCD4",
-                "neutral": "#9E9E9E"
-            }
             emotion_color = emotion_colors.get(audio_label.lower(), "#667eea")
 
             with audio_cols[0]:
@@ -493,3 +527,167 @@ if uploaded_file is not None:
             st.warning("⚠️ Unable to detect voice emotion. Please try another file.")
     else:
         st.error("❌ Conversion failed. Please upload a valid audio file.")
+
+# 🎥 Video Upload Section for Face Emotion Detection
+st.markdown("<br><br>", unsafe_allow_html=True)
+st.markdown("""
+    <div class="upload-section">
+        <h2 style='text-align: center; color: #a0a0ff; margin-bottom: 1rem;'>🎥 Upload Your Video File for Face Emotion Detection</h2>
+    </div>
+""", unsafe_allow_html=True)
+
+uploaded_video = st.file_uploader(
+    "Upload video file",
+    type=["mp4", "avi", "mov", "mkv", "webm"],
+    key="video_uploader",
+    label_visibility="collapsed",
+)
+
+if uploaded_video is not None:
+    if face_model is None or face_device is None:
+        st.error("❌ Face emotion model is not available. Please check model files.")
+    else:
+        # Save video to temporary file
+        file_ext = os.path.splitext(uploaded_video.name)[1].lower()
+        with tempfile.NamedTemporaryFile(delete=False, suffix=file_ext) as tmp_video:
+            tmp_video.write(uploaded_video.read())
+            video_path = tmp_video.name
+        
+        # Display video
+        st.markdown("<br>", unsafe_allow_html=True)
+        st.video(video_path)
+        
+        with st.spinner("🔍 Analyzing face emotions in video..."):
+            try:
+                # Process video
+                results = process_video_emotions(
+                    video_path,
+                    face_model,
+                    face_transform,
+                    face_device,
+                    fps_sample=1  # Sample 1 frame per second
+                )
+                
+                if results['dominant_emotion'] is not None:
+                    st.markdown("<br>", unsafe_allow_html=True)
+                    st.markdown("""
+                        <div class="emotion-card">
+                            <h2 class="section-header" style='color: #667eea;'>😊 Face Emotion Analysis</h2>
+                        </div>
+                    """, unsafe_allow_html=True)
+                    
+                    # Get dominant emotion name
+                    dominant_emotion_name = EMOTIONS[results['dominant_emotion']]
+                    
+                    # Calculate average confidence
+                    valid_confidences = [c for c in results['confidences'] if c > 0]
+                    avg_confidence = np.mean(valid_confidences) if len(valid_confidences) > 0 else 0.0
+                    
+                    face_cols = st.columns([1, 1])
+                    emotion_colors = {
+                        "angry": "#FF4444",
+                        "happy": "#4CAF50",
+                        "sad": "#2196F3",
+                        "fear": "#9C27B0",
+                        "disgust": "#FF9800",
+                        "surprise": "#00BCD4",
+                        "neutral": "#9E9E9E"
+                    }
+                    emotion_color = emotion_colors.get(dominant_emotion_name.lower(), "#667eea")
+                    
+                    with face_cols[0]:
+                        st.markdown(
+                            f"""
+                            <div style='text-align: center; padding: 1rem; background: linear-gradient(135deg, {emotion_color}33 0%, {emotion_color}55 100%); border-radius: 10px; border: 1px solid {emotion_color}66;'>
+                                <h3 style='color: #d0d0d0; margin-bottom: 0.5rem;'>Dominant Emotion</h3>
+                                <h2 class="emotion-label" style='color: {emotion_color};'>{dominant_emotion_name.upper()}</h2>
+                            </div>
+                            """,
+                            unsafe_allow_html=True
+                        )
+                    with face_cols[1]:
+                        st.markdown(
+                            f"""
+                            <div style='text-align: center; padding: 1rem; background: linear-gradient(135deg, #4CAF5033 0%, #4CAF5055 100%); border-radius: 10px; border: 1px solid #4CAF5066;'>
+                                <h3 style='color: #d0d0d0; margin-bottom: 0.5rem;'>Average Confidence</h3>
+                                <h2 class="confidence-label" style='color: #4CAF50;'>{avg_confidence * 100:.2f}%</h2>
+                            </div>
+                            """,
+                            unsafe_allow_html=True
+                        )
+                    
+                    # Emotion distribution chart
+                    if results['avg_probabilities']:
+                        st.markdown("<br>", unsafe_allow_html=True)
+                        st.markdown("### 📊 Face Emotion Probabilities")
+                        face_proba_dict = {EMOTIONS[i]: results['avg_probabilities'][i] for i in range(len(EMOTIONS))}
+                        face_proba_df = (
+                            pd.DataFrame.from_dict(face_proba_dict, orient="index", columns=["probability"])
+                            .sort_values("probability", ascending=False)
+                        )
+                        st.bar_chart(face_proba_df, height=300, use_container_width=True)
+                    
+                    # Emotion timeline
+                    if len(results['frame_times']) > 0 and any(e is not None for e in results['emotions']):
+                        st.markdown("<br>", unsafe_allow_html=True)
+                        st.markdown("### 📈 Emotion Timeline")
+                        
+                        # Create timeline data
+                        timeline_data = []
+                        for i, (time, emotion_idx) in enumerate(zip(results['frame_times'], results['emotions'])):
+                            if emotion_idx is not None:
+                                timeline_data.append({
+                                    'Time (seconds)': time,
+                                    'Emotion': EMOTIONS[emotion_idx],
+                                    'Confidence': results['confidences'][i]
+                                })
+                        
+                        if timeline_data:
+                            timeline_df = pd.DataFrame(timeline_data)
+                            
+                            # Create emotion counts for pie chart
+                            emotion_counts_df = pd.DataFrame({
+                                'Emotion': [EMOTIONS[i] for i in results['emotion_counts'].keys()],
+                                'Count': list(results['emotion_counts'].values())
+                            })
+                            
+                            col1, col2 = st.columns(2)
+                            with col1:
+                                st.line_chart(timeline_df.set_index('Time (seconds)')['Confidence'], height=300)
+                            with col2:
+                                st.bar_chart(emotion_counts_df.set_index('Emotion'), height=300)
+                    
+                    # Statistics
+                    st.markdown("<br>", unsafe_allow_html=True)
+                    st.markdown("### 📊 Video Analysis Statistics")
+                    stat_cols = st.columns(4)
+                    total_frames = len(results['emotions'])
+                    frames_with_faces = sum(1 for e in results['emotions'] if e is not None)
+                    
+                    with stat_cols[0]:
+                        st.metric("Total Frames Analyzed", total_frames)
+                    with stat_cols[1]:
+                        st.metric("Frames with Faces", frames_with_faces)
+                    with stat_cols[2]:
+                        st.metric("Video Duration", f"{results['frame_times'][-1]:.1f}s" if results['frame_times'] else "0s")
+                    with stat_cols[3]:
+                        st.metric("Face Detection Rate", f"{frames_with_faces/total_frames*100:.1f}%" if total_frames > 0 else "0%")
+                
+                else:
+                    st.warning("⚠️ No faces detected in the video. Please upload a video with visible faces.")
+                
+                # Clean up temporary file
+                try:
+                    os.remove(video_path)
+                except:
+                    pass
+                    
+            except Exception as e:
+                st.error(f"❌ Error processing video: {str(e)}")
+                import traceback
+                st.code(traceback.format_exc())
+                # Clean up temporary file
+                try:
+                    os.remove(video_path)
+                except:
+                    pass
