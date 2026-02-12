@@ -17,7 +17,7 @@ import cv2
 from pathlib import Path
 from audio_formatter import convert_to_wav
 from torchvision import transforms
-from models.face_model import FaceEmotionCNN, EMOTIONS
+from models.cv.face_model import FaceEmotionCNN, EMOTIONS
 from video_processor import process_video_emotions
 
 
@@ -42,8 +42,7 @@ except Exception:
     pass
 
 BASE_DIR = Path(__file__).resolve().parent
-TEXT_MODEL_DIR = BASE_DIR / "Emotion-Detection-in-Text"
-TEXT_MODEL_PATH = TEXT_MODEL_DIR / "models" / "emotion_classifier_pipe_lr.pkl"
+TEXT_MODEL_PATH = BASE_DIR / "models" / "text" / "emotion_classifier_pipe_lr.pkl"
 # Set page config
 st.set_page_config(page_title="Emotion Recognition from Speech & Video", page_icon="🎧", layout="wide", initial_sidebar_state="collapsed")
 
@@ -162,11 +161,11 @@ st.markdown(
 @st.cache_resource
 def load_model_and_utils():
     try:
-        model = tf.keras.models.load_model("models/emotion_recognition_model.keras")
-        scaler_params = np.load("models/scaler_params.npy", allow_pickle=True).item()
+        model = tf.keras.models.load_model("models/audio/emotion_recognition_model.keras")
+        scaler_params = np.load("models/audio/scaler_params.npy", allow_pickle=True).item()
         mean = scaler_params['mean']
         scale = scaler_params['scale']
-        with open("models/label_encoder.pkl", "rb") as f:
+        with open("models/audio/label_encoder.pkl", "rb") as f:
             le = pickle.load(f)
         return model, mean, scale, le
     except Exception as e:
@@ -205,7 +204,7 @@ def load_face_emotion_model():
     try:
         device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         model = FaceEmotionCNN(num_classes=7)
-        model_path = BASE_DIR / "models" / "face_model.pth"
+        model_path = BASE_DIR / "models" / "cv" / "face_model.pth"
         
         if model_path.exists():
             model.load_state_dict(torch.load(str(model_path), map_location=device))
