@@ -324,8 +324,8 @@ def aggregate_multimodal_emotions(
     Weights: face 40%, voice 40%, text 20%.
     Only active modalities (non-None label) participate.
     """
-    w_face = 0.40
-    w_audio = 0.40
+    w_face = 0.35
+    w_audio = 0.55
     w_text = 0.20
 
     candidates = {}
